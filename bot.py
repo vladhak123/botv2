@@ -202,11 +202,11 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"здарова я {BOT_NAME} 👋\n"
         f"команди:\n"
-        f"/стата — КС статистика deadk1ng\n"
-        f"/мем [ім'я] — мем про пацана\n"
-        f"/кальян — порахувати кальян\n"
-        f"/кальяни — скільки кальянів\n"
-        f"/нагадай [час] [що] — нагадалка\n"
+        f"/stata — КС статистика deadk1ng\n"
+        f"/mem [ім'я] — мем про пацана\n"
+        f"/kalyan — зафіксувати кальян\n"
+        f"/kalyany — скільки кальянів\n"
+        f"/nagadaj [час] [що] — нагадалка\n"
         f"/clear — очистити пам'ять"
     )
 
@@ -354,15 +354,19 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("clear", clear))
-    app.add_handler(CommandHandler("стата", cs_stats_cmd))
-    app.add_handler(CommandHandler("мем", meme_cmd))
-    app.add_handler(CommandHandler("кальян", hookah_cmd))
-    app.add_handler(CommandHandler("кальяни", hookahs_cmd))
-    app.add_handler(CommandHandler("нагадай", remind_cmd))
+    app.add_handler(CommandHandler("stata", cs_stats_cmd))
+    app.add_handler(CommandHandler("mem", meme_cmd))
+    app.add_handler(CommandHandler("kalyan", hookah_cmd))
+    app.add_handler(CommandHandler("kalyany", hookahs_cmd))
+    app.add_handler(CommandHandler("nagadaj", remind_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info(f"Бот {BOT_NAME} запущен...")
     app.run_polling()
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
