@@ -15,12 +15,12 @@ import httpx
 # ──────────────────────────────────────────────
 # НАСТРОЙКИ
 # ──────────────────────────────────────────────
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "ВАШ_ТОКЕН")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "ВАШ_КЛЮЧ")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8629748711:AAFIG554VssKal1x84_vX4Uu3tqSOYCE8pY")
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-231e176be968441ba5d9799c6d5c708a")
 BOT_NAME = "Стасик"
 MAX_HISTORY = 100
 RANDOM_REPLY_CHANCE = 0.20
-GROUP_CHAT_ID = int(os.environ.get("GROUP_CHAT_ID", "0"))  # ID вашего чата
+GROUP_CHAT_ID = int(os.environ.get("GROUP_CHAT_ID", "-1003731794890"))  # ID вашего чата
 DAILY_HOUR = 9   # час утреннего дейли (UTC+2)
 DAILY_MINUTE = 0
 # ──────────────────────────────────────────────
