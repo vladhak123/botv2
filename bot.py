@@ -2,9 +2,10 @@ import os
 import random
 import logging
 import asyncio
-from datetime import datetime, time
+import re
+from datetime import datetime
 from collections import defaultdict, deque
-from openai import OpenAI
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -16,12 +17,12 @@ import httpx
 # НАСТРОЙКИ
 # ──────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8629748711:AAFIG554VssKal1x84_vX4Uu3tqSOYCE8pY")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "sk-231e176be968441ba5d9799c6d5c708a")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyAVR1o8sUTo4h6f5NB6G12sJa61OYEXu4A")
 BOT_NAME = "Стасик"
-MAX_HISTORY = 100
+MAX_HISTORY = 50
 RANDOM_REPLY_CHANCE = 0.20
-GROUP_CHAT_ID = int(os.environ.get("GROUP_CHAT_ID", "-1003731794890"))  # ID вашего чата
-DAILY_HOUR = 9   # час утреннего дейли (UTC+2)
+GROUP_CHAT_ID = int(os.environ.get("GROUP_CHAT_ID", "-1003731794890"))
+DAILY_HOUR = 9
 DAILY_MINUTE = 0
 # ──────────────────────────────────────────────
 
@@ -46,8 +47,6 @@ CREW_KNOWLEDGE = """
 - крипту не любить і не шарить
 - любить курити кальян, часто з владіком
 - говорить прямо, без фільтрів
-
-кальян-лічильник зберігається окремо — використовуй його коли питають
 """
 
 SYSTEM_PROMPT = f"""ти {BOT_NAME}, свій корисний пацан з україни в чаті
@@ -73,33 +72,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    system_instruction=SYSTEM_PROMPT
+)
 
 chat_history: dict[int, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
-reminders: list[dict] = []  # [{chat_id, user, text, time}]
-hookah_count: dict[int, int] = defaultdict(int)  # chat_id -> count
+chat_sessions: dict[int, any] = {}
+reminders: list[dict] = []
+hookah_count: dict[int, int] = defaultdict(int)
 
 
 # ──────────────────────────────────────────────
-# DeepSeek
+# Gemini
 # ──────────────────────────────────────────────
-def ask_deepseek(chat_id: int, prompt_override: str = None) -> str:
-    history = list(chat_history[chat_id])
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if prompt_override:
-        messages.append({"role": "user", "content": prompt_override})
-    else:
-        messages += history
+def get_session(chat_id: int):
+    if chat_id not in chat_sessions:
+        chat_sessions[chat_id] = model.start_chat(history=[])
+    return chat_sessions[chat_id]
+
+
+def ask_gemini(chat_id: int, prompt_override: str = None) -> str:
     try:
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            max_tokens=600,
-            temperature=0.85,
-        )
-        return response.choices[0].message.content.strip()
+        session = get_session(chat_id)
+        if prompt_override:
+            response = session.send_message(prompt_override)
+        else:
+            history = list(chat_history[chat_id])
+            if not history:
+                return None
+            last = history[-1]["content"]
+            response = session.send_message(last)
+        return response.text.strip()
     except Exception as e:
-        logger.error(f"DeepSeek error: {e}")
+        logger.error(f"Gemini error: {e}")
         return None
 
 
@@ -141,12 +148,11 @@ async def send_daily(app: Application):
         "доброго ранку кіберспортсмени ☀️ як справи, що плануєте сьогодні?",
         "всім привіт, новий день — нові можливості. що по планах?",
         "ранок добрий пацани. хто вже на ногах?",
-        "добрий ранок. сьогодні буде хороший день, я відчуваю 💪",
+        "добрий ранок. сьогодні буде хороший день 💪",
         "всім доброго ранку! хто що робить сьогодні?",
     ]
-    msg = random.choice(greetings)
     try:
-        await app.bot.send_message(chat_id=GROUP_CHAT_ID, text=msg)
+        await app.bot.send_message(chat_id=GROUP_CHAT_ID, text=random.choice(greetings))
     except Exception as e:
         logger.error(f"Daily error: {e}")
 
@@ -154,7 +160,6 @@ async def send_daily(app: Application):
 async def daily_scheduler(app: Application):
     while True:
         now = datetime.utcnow()
-        # UTC+2
         hour_local = (now.hour + 2) % 24
         if hour_local == DAILY_HOUR and now.minute == DAILY_MINUTE:
             await send_daily(app)
@@ -184,8 +189,6 @@ async def reminder_scheduler(app: Application):
 
 
 def parse_reminder(text: str) -> tuple:
-    """Парсит 'нагадай мені о 19:30 піти в зал' -> ('19:30', 'піти в зал')"""
-    import re
     match = re.search(r'о?\s*(\d{1,2})[:\.]?(\d{2})?\s*(.+)', text, re.IGNORECASE)
     if match:
         hour = match.group(1)
@@ -196,12 +199,11 @@ def parse_reminder(text: str) -> tuple:
 
 
 # ──────────────────────────────────────────────
-# Хендлеры команд
+# Команды
 # ──────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"здарова я {BOT_NAME} 👋\n"
-        f"команди:\n"
         f"/stata — КС статистика deadk1ng\n"
         f"/mem [ім'я] — мем про пацана\n"
         f"/kalyan — зафіксувати кальян\n"
@@ -212,7 +214,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def clear(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    chat_history[update.effective_chat.id].clear()
+    chat_id = update.effective_chat.id
+    chat_history[chat_id].clear()
+    if chat_id in chat_sessions:
+        del chat_sessions[chat_id]
     await update.message.reply_text("пам'ять очистив 🧹")
 
 
@@ -227,11 +232,10 @@ async def cs_stats_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def meme_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args = " ".join(ctx.args) if ctx.args else "пацана"
-    prompt = (
-        f"придумай смішний короткий мем про {args} в стилі інтернет-мемів. "
-        f"формат: верхній текст / нижній текст. коротко і смішно"
+    reply = ask_gemini(
+        update.effective_chat.id,
+        prompt_override=f"придумай смішний короткий мем про {args}. формат: верхній текст / нижній текст. коротко і смішно"
     )
-    reply = ask_deepseek(update.effective_chat.id, prompt_override=prompt)
     if reply:
         await update.message.reply_text(f"🎭 {reply}")
 
@@ -239,29 +243,26 @@ async def meme_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def hookah_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     hookah_count[chat_id] += 1
-    count = hookah_count[chat_id]
-    await update.message.reply_text(f"💨 кальян #{count} зафіксовано")
+    await update.message.reply_text(f"💨 кальян #{hookah_count[chat_id]} зафіксовано")
 
 
 async def hookahs_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    count = hookah_count[chat_id]
-    await update.message.reply_text(f"💨 всього кальянів: {count}")
+    await update.message.reply_text(f"💨 всього кальянів: {hookah_count[chat_id]}")
 
 
 async def remind_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("напиши так: /нагадай 19:30 піти в зал")
+        await update.message.reply_text("напиши так: /nagadaj 19:30 піти в зал")
         return
     text = " ".join(ctx.args)
     remind_time, what = parse_reminder(text)
     if not remind_time:
-        await update.message.reply_text("не зрозумів час, напиши так: /нагадай 19:30 піти в зал")
+        await update.message.reply_text("не зрозумів час, напиши так: /nagadaj 19:30 піти в зал")
         return
-    user = update.message.from_user.first_name
     reminders.append({
         "chat_id": update.effective_chat.id,
-        "user": user,
+        "user": update.message.from_user.first_name,
         "text": what,
         "time": remind_time
     })
@@ -269,7 +270,7 @@ async def remind_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
-# Основной хендлер сообщений
+# Основной хендлер
 # ──────────────────────────────────────────────
 async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.message
@@ -288,8 +289,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     })
 
     # Автодетект напоминалки
-    remind_keywords = ["нагадай", "нагади", "нагадайте", "нагадати"]
-    if any(kw in text.lower() for kw in remind_keywords):
+    if any(kw in text.lower() for kw in ["нагадай", "нагади", "нагадати"]):
         remind_time, what = parse_reminder(text)
         if remind_time and what:
             reminders.append({
@@ -304,8 +304,7 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Автодетект кальяна
     if "кальян" in text.lower() and any(w in text.lower() for w in ["курим", "їдемо", "йдемо", "погнали", "покурили"]):
         hookah_count[chat_id] += 1
-        count = hookah_count[chat_id]
-        await msg.reply_text(f"💨 кальян #{count} зафіксовано, поїхали!")
+        await msg.reply_text(f"💨 кальян #{hookah_count[chat_id]} зафіксовано, поїхали!")
         return
 
     is_reply_to_bot = (
@@ -316,7 +315,6 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     is_mentioned = bot_username and f"@{bot_username}" in text
     is_name_mentioned = BOT_NAME.lower() in text.lower()
     should_reply = is_private or is_reply_to_bot or is_mentioned or is_name_mentioned
-
     random_jump = not should_reply and random.random() < RANDOM_REPLY_CHANCE
 
     if not should_reply and not random_jump:
@@ -325,19 +323,15 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     if random_jump:
-        prompt = (
-            f"ти читав переписку. останнє повідомлення від {user_name}: «{text}». "
-            f"влізь в розмову коротко і до теми — підтримай або додай щось корисне"
+        reply = ask_gemini(
+            chat_id,
+            prompt_override=f"ти читав переписку. останнє повідомлення від {user_name}: «{text}». влізь в розмову коротко і до теми"
         )
-        reply = ask_deepseek(chat_id, prompt_override=prompt)
     else:
-        reply = ask_deepseek(chat_id)
+        reply = ask_gemini(chat_id)
 
     if reply:
-        chat_history[chat_id].append({
-            "role": "assistant",
-            "content": reply
-        })
+        chat_history[chat_id].append({"role": "assistant", "content": reply})
         await msg.reply_text(reply)
 
 
@@ -351,7 +345,6 @@ async def post_init(app: Application):
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("clear", clear))
     app.add_handler(CommandHandler("stata", cs_stats_cmd))
@@ -360,13 +353,8 @@ def main():
     app.add_handler(CommandHandler("kalyany", hookahs_cmd))
     app.add_handler(CommandHandler("nagadaj", remind_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     logger.info(f"Бот {BOT_NAME} запущен...")
     app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
